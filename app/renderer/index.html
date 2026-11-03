@@ -1,0 +1,86 @@
+
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' file:; style-src 'self' 'unsafe-inline' file:; img-src 'self' data: file:; font-src 'self' data: file:;">
+<title>claude-deck</title>
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header>
+  <h1>claude-deck</h1>
+  <span class="meta" id="stamp"></span>
+</header>
+
+<aside id="rail">
+  <div class="rail-btns">
+    <button id="newBtn" title="abrir uma sessão Claude numa pasta">+ sessão</button>
+    <button id="groupBtn" title="criar um grupo para organizar as sessões por tema">+ grupo</button>
+  </div>
+
+  <div id="newForm" class="new-form" hidden>
+    <input id="newCwd" list="dirs" placeholder="pasta do projeto" spellcheck="false">
+    <datalist id="dirs"></datalist>
+    <select id="newGroup" title="grupo da sessão nova"></select>
+    <div class="new-row">
+      <button id="newPick" title="escolher a pasta">…</button>
+      <button id="newGo">abrir</button>
+      <button id="newCancel">cancelar</button>
+    </div>
+    <div class="new-msg" id="newMsg"></div>
+  </div>
+
+  <div id="groupForm" class="new-form" hidden>
+    <input id="groupName" placeholder="nome do grupo (ex.: incidentes)" spellcheck="false" maxlength="32">
+    <div class="swatches" id="swatches"></div>
+    <div class="new-row">
+      <button id="groupGo">salvar</button>
+      <button id="groupCancel">cancelar</button>
+    </div>
+    <div class="new-msg" id="groupMsg"></div>
+  </div>
+
+  <div class="empty" id="railEmpty">nenhuma sessão ainda</div>
+  <div id="railList"></div>
+</aside>
+
+<main>
+  <div class="stage" id="stage">
+    <div class="head" id="head" hidden>
+      <span class="dot" id="headDot"></span>
+      <span class="title" id="headTitle"></span>
+      <span class="chip" id="headChip" hidden></span>
+      <span class="badge" id="headBadge"></span>
+      <span class="sub" id="headCwd"></span>
+      <button class="kill" id="headKill" title="encerrar esta sessão">✕</button>
+    </div>
+
+    <div class="nothing" id="nothing">
+      <h2>nenhuma sessão aberta</h2>
+      <p>Use <b>+ sessão</b> para abrir o Claude numa pasta. O terminal é este app:
+         a sessão nasce aqui dentro e morre com ele — dá para retomar depois com <b>retomar</b>.</p>
+    </div>
+
+    <div id="termWrap" hidden><div id="term"></div></div>
+
+    <div class="bar" id="bar" hidden>
+      <span id="barState"></span>
+      <span class="grow"></span>
+      <span id="barHint"></span>
+    </div>
+  </div>
+</main>
+
+<div id="ctx" hidden></div>
+
+<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+<script src="../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
+<script src="../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

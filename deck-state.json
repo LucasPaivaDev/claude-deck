@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "instance": "D:\\Users\\lucas.paiva\\.local/share/wezterm\\gui-sock-12192",
+  "groups": [
+    {
+      "id": "gmw1311as",
+      "name": "Incidentes",
+      "color": "#d9693f",
+      "collapsed": false
+    },
+    {
+      "id": "gmw1334mp",
+      "name": "Melhorias",
+      "color": "#2bb3a3",
+      "collapsed": false
+    }
+  ],
+  "members": {
+    "1": "gmw1311as",
+    "3": "gmw1311as",
+    "4": "gmw1334mp",
+    "7": "gmw1311as",
+    "8": "gmw1311as",
+    "9": "gmw1311as"
+  }
+}

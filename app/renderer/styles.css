@@ -1,0 +1,146 @@
+/* Portado do public/index.html da versao WezTerm. As cores de estado e a
+   paleta de grupo sao as mesmas de proposito: a cor da borda esquerda responde
+   "preciso de mim?", a etiqueta do grupo responde "sobre o que?". */
+
+:root {
+  --bg: #0f1115; --card: #171a21; --line: #272c36; --fg: #d7dce5; --dim: #7b8494;
+  --idle: #5ad17f; --busy: #e0b254; --shell: #5a6372; --menu: #e86a8c; --closed: #4a515f;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 13px/1.4 "JetBrainsMono Nerd Font", "Cascadia Mono", Consolas, monospace;
+  display: grid; grid-template-rows: auto 1fr; grid-template-columns: 250px 1fr;
+  overflow: hidden;
+}
+header {
+  grid-column: 1 / -1; display: flex; align-items: center; gap: 14px;
+  padding: 9px 14px; border-bottom: 1px solid var(--line); -webkit-app-region: drag;
+}
+header button, header label, header input { -webkit-app-region: no-drag; }
+h1 { font-size: 12px; margin: 0; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); }
+label { color: var(--dim); display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 11.5px; }
+button {
+  background: #1f2430; color: var(--fg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 6px 10px; font: inherit; font-size: 11px; cursor: pointer;
+}
+button:hover { border-color: #4a5365; }
+button:disabled { opacity: .4; cursor: default; }
+.meta { color: var(--dim); font-size: 11px; margin-left: auto; }
+.warn { color: var(--menu); font-size: 11px; }
+
+/* ----------------------------------------------------------- menu lateral */
+#rail { border-right: 1px solid var(--line); overflow: auto; padding: 8px 6px; }
+/* div com role=button, nao <button>: um <button draggable> nao inicia arraste
+   em parte dos motores, e arrastar para o grupo e o gesto principal aqui */
+.rail-item {
+  display: block; width: 100%; text-align: left; margin-bottom: 4px;
+  padding: 7px 8px; background: transparent; border: 1px solid transparent;
+  border-radius: 4px; color: var(--fg); font: inherit; cursor: pointer;
+}
+.rail-item:hover { background: #1b1f28; }
+.rail-item.on { background: #222836; border-color: var(--line); }
+.rail-item.dragging { opacity: .4; }
+.rail-item:focus-visible { outline: 1px solid #4a5365; }
+.rail-top { display: flex; align-items: center; gap: 6px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--shell); flex: none; }
+.rail-name { flex: 1; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rail-state { font-size: 10.5px; color: var(--dim); padding-left: 13px; }
+.idle .dot { background: var(--idle); } .idle .rail-state { color: var(--idle); }
+.busy .dot { background: var(--busy); } .busy .rail-state { color: var(--busy); }
+.menu .dot { background: var(--menu); } .menu .rail-state { color: var(--menu); }
+.closed .dot { background: var(--closed); } .closed .rail-name { color: var(--dim); }
+
+.rail-btns { display: flex; gap: 4px; margin-bottom: 8px; }
+.rail-btns button { flex: 1; margin: 0; }
+.new-form { padding: 0 2px 10px; }
+.new-form input, .new-form select {
+  width: 100%; background: #0f1115; color: var(--fg); border: 1px solid var(--line);
+  border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 11.5px;
+}
+.new-form select { margin-top: 4px; }
+.new-form input:focus, .new-form select:focus { outline: none; border-color: #4a5365; }
+.new-row { display: flex; gap: 4px; margin-top: 4px; }
+.new-row button { flex: 1; }
+.new-msg { color: var(--dim); font-size: 10.5px; margin-top: 4px; word-break: break-word; }
+.new-msg.err { color: var(--menu); }
+.swatches { display: flex; gap: 5px; margin-top: 6px; }
+.swatches button { width: 20px; height: 20px; border-radius: 50%; padding: 0; border: 2px solid transparent; }
+.swatches button.on { border-color: #fff; }
+
+.group { margin-bottom: 7px; }
+.group-head {
+  display: flex; align-items: center; gap: 6px; padding: 5px 7px; border-radius: 4px;
+  background: #151922; cursor: pointer; user-select: none; border-left: 3px solid var(--gc, var(--line));
+}
+.group-head:hover { background: #1c212b; }
+.group-head.drop, .group-body.drop { background: #202735; outline: 1px dashed #5a6578; }
+.group-caret { color: var(--dim); font-size: 9px; width: 9px; flex: none; }
+.group-name { flex: 1; font-size: 11.5px; letter-spacing: .03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group-count { display: flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--dim); }
+.group-count i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex: none; }
+.group-body { padding: 4px 0 0 5px; border-radius: 4px; min-height: 6px; }
+.empty { padding: 26px 12px; color: var(--dim); font-size: 11.5px; }
+
+/* ----------------------------------------------------------------- painel */
+main { min-height: 0; min-width: 0; display: flex; flex-direction: column; padding: 10px; }
+.stage {
+  flex: 1; min-height: 0; background: var(--card); border: 1px solid var(--line);
+  border-left-width: 3px; border-radius: 6px; display: flex; flex-direction: column; overflow: hidden;
+}
+.stage.idle { border-left-color: var(--idle); }
+.stage.busy { border-left-color: var(--busy); }
+.stage.menu { border-left-color: var(--menu); }
+.stage.shell { border-left-color: var(--shell); }
+.stage.closed { border-left-color: var(--closed); }
+.head { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+.title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+.sub { color: var(--dim); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid currentColor; }
+.idle .badge { color: var(--idle); } .busy .badge { color: var(--busy); }
+.menu .badge { color: var(--menu); } .shell .badge { color: var(--shell); }
+.closed .badge { color: var(--closed); }
+/* a cor do grupo nunca vai na borda esquerda: aquela ja e o estado */
+.chip {
+  font-size: 10px; padding: 1px 7px; border-radius: 10px; color: #0f1115; font-weight: 700;
+  white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+}
+.kill { background: transparent; border: none; color: var(--dim); padding: 0 3px; font-size: 14px; line-height: 1; }
+.kill:hover { color: #ff8095; }
+
+#termWrap { flex: 1; min-height: 0; position: relative; }
+#term { position: absolute; inset: 0; padding: 6px 4px 6px 8px; }
+.xterm { height: 100%; }
+.xterm-viewport::-webkit-scrollbar { width: 10px; }
+.xterm-viewport::-webkit-scrollbar-thumb { background: #2d3440; border-radius: 5px; }
+
+.nothing { flex: 1; display: grid; place-content: center; text-align: center; color: var(--dim); gap: 10px; }
+.nothing h2 { font-size: 13px; font-weight: 600; color: var(--fg); margin: 0; letter-spacing: .04em; }
+.nothing p { margin: 0; font-size: 11.5px; max-width: 420px; line-height: 1.6; }
+
+.bar {
+  display: flex; align-items: center; gap: 10px; padding: 5px 10px;
+  border-top: 1px solid var(--line); color: var(--dim); font-size: 10.5px; min-height: 26px;
+}
+.bar .grow { flex: 1; }
+.bar.alert { color: var(--menu); }
+
+/* menu de contexto: elemento unico, fixo, filho direto do body */
+#ctx {
+  position: fixed; z-index: 50; min-width: 196px; max-width: 280px; padding: 4px;
+  background: #1b2028; border: 1px solid #39414f; border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.55);
+}
+#ctx[hidden] { display: none; }
+#ctx .ci {
+  display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+  padding: 6px 8px; background: transparent; border: none; border-radius: 4px;
+  font-size: 11.5px; color: var(--fg);
+}
+#ctx .ci:hover { background: #2a3140; }
+#ctx .ci.danger { color: #ff8095; }
+#ctx .ci span.txt { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ctx .sw { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+#ctx .sep { height: 1px; background: var(--line); margin: 4px 2px; }
+#ctx .lab { padding: 6px 8px 3px; color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }

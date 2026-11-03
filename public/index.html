@@ -1,0 +1,1114 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude-deck</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #171a21; --line: #272c36; --fg: #d7dce5; --dim: #7b8494;
+    --idle: #5ad17f; --busy: #e0b254; --shell: #5a6372; --menu: #e86a8c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; background: var(--bg); color: var(--fg);
+         font: 13px/1.4 "JetBrainsMono Nerd Font", Consolas, monospace;
+         display: grid; grid-template-rows: auto 1fr; grid-template-columns: 240px 1fr; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px;
+           padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 13px; margin: 0; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  label { color: var(--dim); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  button { background: #1f2430; color: var(--fg); border: 1px solid var(--line); border-radius: 4px;
+           padding: 7px 10px; font: inherit; font-size: 11px; cursor: pointer; }
+  button:hover { border-color: #4a5365; }
+  button:disabled { opacity: .4; cursor: default; }
+  .views { display: flex; gap: 4px; }
+  .views button.on { background: #2a3140; border-color: #4a5365; }
+  .meta { color: var(--dim); font-size: 11px; }
+
+  /* menu lateral: a lista de sessoes e tambem a navegacao da tela cheia */
+  #rail { border-right: 1px solid var(--line); overflow: auto; padding: 8px 6px; }
+  /* div com role=button, nao <button>: um <button draggable> nao arrasta em
+     parte dos navegadores, e arrastar para o grupo e o gesto principal aqui */
+  .rail-item { display: block; width: 100%; text-align: left; margin-bottom: 4px;
+               padding: 7px 8px; background: transparent; border: 1px solid transparent;
+               border-radius: 4px; color: var(--fg); font: inherit; cursor: pointer; }
+  .rail-item:hover { background: #1b1f28; }
+  .rail-item.on { background: #222836; border-color: var(--line); }
+  .rail-item.dragging { opacity: .4; }
+  .rail-item:focus-visible { outline: 1px solid #4a5365; }
+  .rail-top { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--shell); flex: none; }
+  .rail-name { flex: 1; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rail-id { color: var(--dim); font-size: 10.5px; }
+  .rail-state { font-size: 10.5px; color: var(--dim); padding-left: 13px; }
+  .idle .dot { background: var(--idle); } .idle .rail-state { color: var(--idle); }
+  .busy .dot { background: var(--busy); } .busy .rail-state { color: var(--busy); }
+  .menu .dot { background: var(--menu); } .menu .rail-state { color: var(--menu); }
+
+  .new-btn { width: 100%; margin-bottom: 8px; }
+  .rail-btns { display: flex; gap: 4px; margin-bottom: 8px; }
+  .rail-btns button { flex: 1; margin: 0; }
+  .new-form { padding: 0 2px 10px; }
+  .new-form input, .new-form select {
+    width: 100%; background: #0f1115; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 11.5px; }
+  .new-form select { margin-top: 4px; }
+  .new-form input:focus, .new-form select:focus { outline: none; border-color: #4a5365; }
+  .new-row { display: flex; gap: 4px; margin-top: 4px; }
+  .new-row button { flex: 1; }
+  .new-msg { color: var(--dim); font-size: 10.5px; margin-top: 4px; }
+  .swatches { display: flex; gap: 5px; margin-top: 6px; }
+  .swatches button { width: 20px; height: 20px; border-radius: 50%; padding: 0;
+                     border: 2px solid transparent; }
+  .swatches button.on { border-color: #fff; }
+
+  /* grupos no menu lateral */
+  .group { margin-bottom: 7px; }
+  .group-head { display: flex; align-items: center; gap: 6px; padding: 5px 7px;
+                border-radius: 4px; background: #151922; cursor: pointer; user-select: none;
+                border-left: 3px solid var(--gc, var(--line)); }
+  .group-head:hover { background: #1c212b; }
+  .group-head.drop, .group-body.drop { background: #202735; outline: 1px dashed #5a6578; }
+  .group-caret { color: var(--dim); font-size: 9px; width: 9px; flex: none; }
+  .group-name { flex: 1; font-size: 11.5px; letter-spacing: .03em; white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis; }
+  .group-count { display: flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--dim); }
+  .group-count i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex: none; }
+  .group-body { padding: 4px 0 0 5px; border-radius: 4px; min-height: 6px; }
+
+  main { min-height: 0; display: flex; flex-direction: column; }
+  #grid { flex: 1; min-height: 0; overflow: auto; display: grid; gap: 12px; padding: 12px;
+          align-content: start; grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); }
+  #solo { flex: 1; min-height: 0; display: flex; padding: 12px; }
+
+  /* faixa de grupo na grade: ocupa a largura inteira e quebra a grade em secoes */
+  .grid-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px;
+               padding: 4px 2px 0; font-size: 11px; letter-spacing: .06em;
+               text-transform: uppercase; color: var(--dim); }
+  .grid-head .sw2 { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  .grid-head b { color: var(--fg); font-weight: 600; }
+  .grid-head .bar { flex: 1; height: 1px; background: var(--line); }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-left-width: 3px;
+          border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; }
+  .card.idle  { border-left-color: var(--idle); }
+  .card.busy  { border-left-color: var(--busy); }
+  .card.menu  { border-left-color: var(--menu); }
+  .card.shell { border-left-color: var(--shell); opacity: .7; }
+  .card.big { flex: 1; min-height: 0; }
+  .head { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px;
+          border-bottom: 1px solid var(--line); cursor: pointer; }
+  .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid currentColor; }
+  .idle .badge { color: var(--idle); } .busy .badge { color: var(--busy); }
+  .menu .badge { color: var(--menu); } .shell .badge { color: var(--shell); }
+  /* a cor do grupo nunca vai na borda esquerda: aquela ja e o estado */
+  .chip { font-size: 10px; padding: 1px 7px; border-radius: 10px; color: #0f1115;
+          font-weight: 700; white-space: nowrap; max-width: 140px; overflow: hidden;
+          text-overflow: ellipsis; }
+  .kill { background: transparent; border: none; color: var(--dim); padding: 0 2px;
+          font-size: 13px; line-height: 1; align-self: center; }
+  .kill:hover { color: #ff8095; border-color: transparent; }
+  pre { margin: 0; padding: 8px 10px; height: 230px; overflow: auto; white-space: pre;
+        font-size: 11.5px; color: #b9c0cc; cursor: pointer; }
+  /* min-height:0 e o que deixa o pre rolar dentro do flex em vez de esticar o card */
+  .big pre { flex: 1; min-height: 0; height: auto; cursor: auto; font-size: 12.5px; }
+  .compose { display: flex; gap: 6px; padding: 6px; border-top: 1px solid var(--line); align-items: flex-end; }
+  textarea { flex: 1; resize: none; background: #0f1115; color: var(--fg); border: 1px solid var(--line);
+             border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 12px; height: 34px; max-height: 120px; }
+  textarea:focus { outline: none; border-color: #4a5365; }
+  .hint { color: var(--dim); font-size: 10.5px; padding: 0 10px 6px; min-height: 14px; }
+  .empty { padding: 30px 12px; color: var(--dim); font-size: 11.5px; }
+
+  /* menu de contexto: elemento unico, fixo, filho direto do body - assim o tick
+     de 1,5s nunca o reconstroi debaixo do clique */
+  #ctx { position: fixed; z-index: 50; min-width: 192px; max-width: 260px; padding: 4px;
+         background: #1b2028; border: 1px solid #39414f; border-radius: 6px;
+         box-shadow: 0 10px 30px rgba(0,0,0,.55); }
+  #ctx[hidden] { display: none; }
+  #ctx .ci { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+             padding: 6px 8px; background: transparent; border: none; border-radius: 4px;
+             font-size: 11.5px; color: var(--fg); }
+  #ctx .ci:hover { background: #2a3140; }
+  #ctx .ci.danger { color: #ff8095; }
+  #ctx .ci span.txt { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #ctx .sw { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  #ctx .sep { height: 1px; background: var(--line); margin: 4px 2px; }
+  #ctx .lab { padding: 6px 8px 3px; color: var(--dim); font-size: 10px;
+              text-transform: uppercase; letter-spacing: .07em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>claude-deck</h1>
+  <span class="views">
+    <button id="btnGrid" title="todos os cards lado a lado">grade</button>
+    <button id="btnSolo" title="uma sessão ocupando a tela">tela cheia</button>
+  </span>
+  <label><input type="checkbox" id="onlyClaude" checked> só sessões Claude</label>
+  <label><input type="checkbox" id="follow" checked> auto-atualizar</label>
+  <span class="meta" id="stamp"></span>
+</header>
+<aside id="rail">
+  <div class="rail-btns">
+    <button id="newBtn" title="abrir uma sessão Claude numa aba nova do WezTerm">+ sessão</button>
+    <button id="groupBtn" title="criar um grupo para organizar as sessões por tema">+ grupo</button>
+  </div>
+  <div id="newForm" class="new-form" hidden>
+    <input id="newCwd" list="dirs" placeholder="pasta do projeto" spellcheck="false">
+    <datalist id="dirs"></datalist>
+    <select id="newGroup" title="grupo da sessão nova"></select>
+    <div class="new-row">
+      <button id="newGo">abrir</button>
+      <button id="newCancel">cancelar</button>
+    </div>
+    <div class="new-msg" id="newMsg"></div>
+  </div>
+  <div id="groupForm" class="new-form" hidden>
+    <input id="groupName" placeholder="nome do grupo (ex.: incidentes)" spellcheck="false" maxlength="32">
+    <div class="swatches" id="swatches"></div>
+    <div class="new-row">
+      <button id="groupGo">salvar</button>
+      <button id="groupCancel">cancelar</button>
+    </div>
+    <div class="new-msg" id="groupMsg"></div>
+  </div>
+  <div class="empty" id="railEmpty">procurando sessões…</div>
+  <div id="railList"></div>
+</aside>
+<main>
+  <div id="grid"></div>
+  <div id="solo"></div>
+</main>
+<div id="ctx" hidden></div>
+<script>
+const TOKEN = "__DECK_TOKEN__";
+const grid = document.getElementById("grid");
+const solo = document.getElementById("solo");
+const rail = document.getElementById("rail");
+const railList = document.getElementById("railList");
+const railEmpty = document.getElementById("railEmpty");
+const dirs = document.getElementById("dirs");
+const newBtn = document.getElementById("newBtn");
+const newForm = document.getElementById("newForm");
+const newCwd = document.getElementById("newCwd");
+const newGroup = document.getElementById("newGroup");
+const newGo = document.getElementById("newGo");
+const newCancel = document.getElementById("newCancel");
+const newMsg = document.getElementById("newMsg");
+const groupBtn = document.getElementById("groupBtn");
+const groupForm = document.getElementById("groupForm");
+const groupName = document.getElementById("groupName");
+const groupGo = document.getElementById("groupGo");
+const groupCancel = document.getElementById("groupCancel");
+const groupMsg = document.getElementById("groupMsg");
+const swatches = document.getElementById("swatches");
+const ctx = document.getElementById("ctx");
+const stamp = document.getElementById("stamp");
+const onlyClaude = document.getElementById("onlyClaude");
+const follow = document.getElementById("follow");
+const btnGrid = document.getElementById("btnGrid");
+const btnSolo = document.getElementById("btnSolo");
+
+const cards = new Map();    // paneId -> { el, refs } : o DOM sobrevive aos refreshes
+const items = new Map();    // paneId -> item do menu lateral
+const drafts = new Map();   // paneId -> texto ainda nao enviado
+const scroll = new Map();   // paneId -> posicao de scroll fixada pelo usuario
+const cwds = new Map();     // paneId -> pasta do pane, usada pela nova sessao
+const sections = new Map(); // groupId ("" = sem grupo) -> secao do menu lateral
+const gridHeads = new Map();// groupId -> faixa de grupo na grade
+
+// Grupos vem do servidor (deck-state.json), nao do localStorage: o pane-id
+// reinicia junto com o WezTerm, e so o servidor sabe disso.
+let groups = [];
+let members = new Map();    // paneId -> groupId
+let palette = ["#4ea8de", "#5c6fd8", "#8b7ff0", "#c05ad1", "#2bb3a3", "#d9693f"];
+
+// view: "solo" = uma sessao em tela cheia (padrao), "grid" = todos os cards
+const savedId = localStorage.getItem("deck.solo");
+let soloId = savedId && /^[0-9]+$/.test(savedId) ? Number(savedId) : null;
+let view = localStorage.getItem("deck.view") === "grid" ? "grid" : "solo";
+let lastShown = [];
+let railHold = false;      // ponteiro sobre o menu: nao reordenar debaixo do clique
+rail.onmouseenter = () => { railHold = true; };
+rail.onmouseleave = () => { railHold = false; };
+
+function saveView() {
+  localStorage.setItem("deck.view", view);
+  if (soloId === null) localStorage.removeItem("deck.solo");
+  else localStorage.setItem("deck.solo", String(soloId));
+}
+
+// uma sessao recem-aberta leva alguns segundos de carencia: um pane criado agora
+// pode nao estar no "cli list" ainda, e a troca automatica roubaria a tela dele
+let soloGrace = 0;
+
+// o scroll fixado numa tela cheia de 200 linhas nao faz sentido no card de 18
+function openSolo(id) {
+  if (view === "solo" && soloId === id) return;
+  if (soloId !== null) scroll.delete(soloId);
+  scroll.delete(id);
+  view = "solo";
+  soloId = id;
+  soloGrace = Date.now() + 5000;
+  saveView();
+  tick();
+}
+
+function showGrid() {
+  if (view === "grid") return;
+  if (soloId !== null) scroll.delete(soloId);
+  view = "grid";
+  saveView();
+  tick();
+}
+
+btnGrid.onclick = showGrid;
+btnSolo.onclick = () => {
+  const id = soloId !== null ? soloId : (lastShown[0] && lastShown[0].paneId);
+  if (id !== undefined && id !== null) openSolo(id);
+};
+
+function api(path, body, method) {
+  return fetch(path, {
+    method: method || (body ? "POST" : "GET"),
+    headers: Object.assign({ "x-deck-token": TOKEN }, body ? { "content-type": "application/json" } : {}),
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// grupos
+// ---------------------------------------------------------------------------
+function groupById(id) {
+  for (const g of groups) if (g.id === id) return g;
+  return null;
+}
+
+// um membro apontando para grupo que nao existe mais conta como sem grupo
+function groupOf(paneId) {
+  const gid = members.get(paneId);
+  return gid && groupById(gid) ? gid : "";
+}
+
+const DESATUALIZADO = "servidor desatualizado — reinicie o node server.js e recarregue esta aba";
+
+// Um servidor antigo nao conhece /api/groups: a rota desconhecida cai na pagina
+// e volta 200 com HTML. res.ok seria verdadeiro, o res.json() estouraria la
+// dentro e a mudanca otimista ficaria so na tela, sumindo no proximo reload.
+// Por isso nao basta checar o status: tem que ser JSON de verdade.
+function jsonOk(res) {
+  return res.ok && (res.headers.get("content-type") || "").indexOf("application/json") >= 0;
+}
+
+// ultimo estado confirmado pelo servidor, para desfazer o que ele nao aceitou
+let lastGood = { groups: [], members: new Map() };
+
+function adoptState(d) {
+  groups = Array.isArray(d.groups) ? d.groups : [];
+  if (Array.isArray(d.palette) && d.palette.length) palette = d.palette;
+  members = new Map();
+  for (const k of Object.keys(d.members || {})) members.set(Number(k), d.members[k]);
+  lastGood = { groups: groups.map((g) => Object.assign({}, g)), members: new Map(members) };
+  railSig = null; // forca reconstrucao das secoes
+}
+
+function rollbackGroups() {
+  groups = lastGood.groups.map((g) => Object.assign({}, g));
+  members = new Map(lastGood.members);
+  railSig = null;
+}
+
+async function loadGroups() {
+  try {
+    const res = await api("/api/groups");
+    if (!jsonOk(res)) throw new Error(res.status === 200 ? DESATUALIZADO : "HTTP " + res.status);
+    adoptState(await res.json());
+  } catch (e) {
+    // sem isso o painel abriria sem grupo nenhum e sem explicacao
+    alert("não foi possível carregar os grupos: " + e.message);
+  }
+}
+
+// o servidor e a fonte de verdade: ele normaliza e devolve o que gravou
+async function saveGroups() {
+  const body = { groups, members: {} };
+  for (const [k, v] of members) body.members[String(k)] = v;
+  try {
+    const res = await api("/api/groups", body);
+    if (!jsonOk(res)) {
+      throw new Error(res.status === 200 ? DESATUALIZADO
+        : "o servidor recusou (" + res.status + "): " + (await res.text()).slice(0, 140));
+    }
+    adoptState(await res.json());
+  } catch (e) {
+    // nunca deixar mudanca que o servidor nao gravou parecendo salva na tela
+    rollbackGroups();
+    alert("os grupos não foram salvos: " + e.message);
+  }
+  tick();
+}
+
+function newGroupId() {
+  return "g" + Date.now().toString(36);
+}
+
+function assign(paneId, gid) {
+  if (gid) members.set(paneId, gid); else members.delete(paneId);
+  railSig = null;
+  saveGroups();
+}
+
+function removeGroup(gid) {
+  groups = groups.filter((g) => g.id !== gid);
+  for (const [k, v] of [...members]) if (v === gid) members.delete(k);
+  saveGroups();
+}
+
+// --- formulario de grupo (estatico no rail: o tick nao pode roubar o foco) ---
+let gfEdit = null;  // id do grupo sendo renomeado, ou null para criar
+let gfPane = null;  // sessao que entra no grupo recem-criado, ou null
+let gfColor = palette[0];
+
+function paintSwatches() {
+  swatches.textContent = "";
+  for (const c of palette) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.style.background = c;
+    b.className = c === gfColor ? "on" : "";
+    b.title = c;
+    b.onclick = () => { gfColor = c; paintSwatches(); };
+    swatches.append(b);
+  }
+}
+
+function openGroupForm(gid, paneId) {
+  gfEdit = gid || null;
+  gfPane = paneId === undefined || paneId === null ? null : paneId;
+  const g = gid ? groupById(gid) : null;
+  gfColor = g ? g.color : palette[groups.length % palette.length];
+  groupName.value = g ? g.name : "";
+  groupMsg.textContent = gfPane !== null ? "a sessão #" + gfPane + " entra neste grupo" : "";
+  paintSwatches();
+  newForm.hidden = true;
+  groupForm.hidden = false;
+  groupName.focus();
+  groupName.select();
+}
+
+function hideGroupForm() {
+  groupForm.hidden = true;
+  gfEdit = null;
+  gfPane = null;
+  groupMsg.textContent = "";
+}
+
+function submitGroup() {
+  const nome = groupName.value.trim();
+  if (!nome) { groupMsg.textContent = "dê um nome ao grupo"; return; }
+  if (gfEdit) {
+    const g = groupById(gfEdit);
+    if (g) { g.name = nome; g.color = gfColor; }
+  } else {
+    const g = { id: newGroupId(), name: nome, color: gfColor, collapsed: false };
+    groups.push(g);
+    if (gfPane !== null) members.set(gfPane, g.id);
+  }
+  hideGroupForm();
+  saveGroups();
+}
+
+groupBtn.onclick = () => { if (groupForm.hidden) openGroupForm(null, null); else hideGroupForm(); };
+groupGo.onclick = submitGroup;
+groupCancel.onclick = hideGroupForm;
+groupName.onkeydown = (e) => {
+  if (e.key === "Enter") { e.preventDefault(); submitGroup(); }
+  if (e.key === "Escape") hideGroupForm();
+};
+
+// ---------------------------------------------------------------------------
+// excluir sessao
+// ---------------------------------------------------------------------------
+async function killPane(id) {
+  let p = null;
+  for (const c of lastShown) if (c.paneId === id) p = c;
+  const nome = p ? p.title : "pane " + id;
+  const aviso = p && p.status === "busy"
+    ? "\n\nEla está trabalhando agora — será interrompida."
+    : "";
+  if (!confirm('Excluir a sessão "' + nome + '" (#' + id + ')?\n\nO pane é fechado no WezTerm.' + aviso)) return;
+  let res;
+  try {
+    res = await api("/api/kill", { pane: id });
+  } catch (e) {
+    alert("falha de rede ao excluir: " + e.message);
+    return;
+  }
+  if (res.status !== 204) {
+    // 200 com HTML = rota desconhecida num servidor antigo, nao uma recusa
+    alert(res.status === 200 ? DESATUALIZADO : "não excluiu: " + (await res.text()).slice(0, 160));
+    return;
+  }
+  drafts.delete(id);
+  scroll.delete(id);
+  members.delete(id);
+  const entry = cards.get(id);
+  if (entry) { entry.el.remove(); cards.delete(id); }
+  const item = items.get(id);
+  if (item) { item.el.remove(); items.delete(id); }
+  // soloGrace=0 para o fallback escolher a proxima sessao ja no tick seguinte
+  if (soloId === id) { soloId = null; soloGrace = 0; saveView(); }
+  tick();
+}
+
+// ---------------------------------------------------------------------------
+// menu de contexto
+// ---------------------------------------------------------------------------
+function closeCtx() { ctx.hidden = true; }
+
+function ctxItem(label, fn, cls, color) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "ci" + (cls ? " " + cls : "");
+  if (color) {
+    const sw = document.createElement("span");
+    sw.className = "sw";
+    sw.style.background = color;
+    b.append(sw);
+  }
+  const t = document.createElement("span");
+  t.className = "txt";
+  t.textContent = label;
+  b.append(t);
+  b.onclick = () => { closeCtx(); fn(); };
+  return b;
+}
+
+function ctxLabel(t) {
+  const d = document.createElement("div");
+  d.className = "lab";
+  d.textContent = t;
+  return d;
+}
+
+function ctxSep() {
+  const d = document.createElement("div");
+  d.className = "sep";
+  return d;
+}
+
+function showCtx(e, nodes) {
+  ctx.textContent = "";
+  for (const n of nodes) ctx.append(n);
+  ctx.style.left = "0px";
+  ctx.style.top = "0px";
+  ctx.hidden = false;
+  // medir depois de visivel, senao o rect vem zerado e o menu sai da tela
+  const r = ctx.getBoundingClientRect();
+  const x = Math.min(e.clientX, window.innerWidth - r.width - 8);
+  const y = Math.min(e.clientY, window.innerHeight - r.height - 8);
+  ctx.style.left = Math.max(6, x) + "px";
+  ctx.style.top = Math.max(6, y) + "px";
+}
+
+function openPaneMenu(e, id) {
+  const cur = groupOf(id);
+  const nodes = [
+    ctxItem("abrir em tela cheia", () => openSolo(id)),
+    ctxItem("focar no WezTerm", () => api("/api/focus", { pane: id })),
+    ctxSep(),
+    ctxLabel("mover para"),
+  ];
+  for (const g of groups) {
+    if (g.id === cur) continue;
+    nodes.push(ctxItem(g.name, () => assign(id, g.id), "", g.color));
+  }
+  if (cur) nodes.push(ctxItem("sem grupo", () => assign(id, "")));
+  nodes.push(ctxItem("novo grupo…", () => openGroupForm(null, id)));
+  nodes.push(ctxSep());
+  nodes.push(ctxItem("excluir sessão", () => killPane(id), "danger"));
+  showCtx(e, nodes);
+}
+
+function openGroupMenu(e, gid) {
+  const g = groupById(gid);
+  if (!g) return;
+  showCtx(e, [
+    ctxItem(g.collapsed ? "expandir" : "colapsar", () => { g.collapsed = !g.collapsed; saveGroups(); }),
+    ctxItem("renomear / mudar cor…", () => openGroupForm(gid, null)),
+    ctxSep(),
+    ctxItem("excluir grupo", () => {
+      // texto explicito: este item fica ao lado de "excluir sessao"
+      const msg = 'Excluir o grupo "' + g.name + '"?\n\n'
+        + 'As sessões NÃO são encerradas: elas voltam para "sem grupo".';
+      if (confirm(msg)) removeGroup(gid);
+    }, "danger"),
+  ]);
+}
+
+addEventListener("mousedown", (e) => { if (!ctx.hidden && !ctx.contains(e.target)) closeCtx(); });
+addEventListener("keydown", (e) => { if (e.key === "Escape") closeCtx(); });
+// rolagem do usuario fecha o menu, que e position:fixed e descolaria da ancora.
+// Mas "scroll" cru nao serve: o tick escreve pre.scrollTop em todo refresh, e
+// isso fechava o menu sozinho em menos de 1,5s. So conta rolagem de verdade -
+// a roda do mouse, ou o scroll dos dois containers que o usuario rola.
+addEventListener("wheel", (e) => { if (!ctx.hidden && !ctx.contains(e.target)) closeCtx(); }, true);
+addEventListener("scroll", (e) => { if (e.target === rail || e.target === grid) closeCtx(); }, true);
+addEventListener("resize", closeCtx);
+addEventListener("blur", closeCtx);
+
+// ---------------------------------------------------------------------------
+// nova sessao
+// ---------------------------------------------------------------------------
+function hideNew() {
+  newForm.hidden = true;
+  newMsg.textContent = "";
+}
+
+function fillGroupSelect() {
+  const sig = groups.map((g) => g.id + g.name).join("|");
+  if (newGroup.dataset.sig === sig) return;
+  newGroup.dataset.sig = sig;
+  const antes = newGroup.value;
+  newGroup.textContent = "";
+  const zero = document.createElement("option");
+  zero.value = "";
+  zero.textContent = "sem grupo";
+  newGroup.append(zero);
+  for (const g of groups) {
+    const o = document.createElement("option");
+    o.value = g.id;
+    o.textContent = g.name;
+    newGroup.append(o);
+  }
+  newGroup.value = groupById(antes) ? antes : "";
+}
+
+newBtn.onclick = () => {
+  if (!newForm.hidden) return hideNew();
+  newCwd.value = (soloId !== null && cwds.get(soloId)) || newCwd.value || "";
+  fillGroupSelect();
+  // a sessao nova nasce no grupo da que voce esta vendo
+  if (soloId !== null) newGroup.value = groupOf(soloId);
+  groupForm.hidden = true;
+  newForm.hidden = false;
+  newCwd.focus();
+  newCwd.select();
+};
+newCancel.onclick = hideNew;
+newGo.onclick = () => spawnSession();
+newCwd.onkeydown = (e) => {
+  if (e.key === "Enter") { e.preventDefault(); spawnSession(); }
+  if (e.key === "Escape") hideNew();
+};
+
+async function spawnSession() {
+  const cwd = newCwd.value.trim();
+  if (!cwd || newGo.disabled) return;   // clique duplo abriria duas abas
+  const gid = newGroup.value;
+  newGo.disabled = true;
+  newMsg.textContent = "abrindo…";
+  try {
+    const res = await api("/api/spawn", { cwd });
+    if (!res.ok) { newMsg.textContent = "não abriu: " + (await res.text()).slice(0, 140); return; }
+    const data = await res.json();
+    hideNew();
+    if (gid && groupById(gid)) { members.set(data.paneId, gid); saveGroups(); }
+    openSolo(data.paneId);
+  } catch (e) {
+    newMsg.textContent = "falha de rede: " + e.message;
+  } finally {
+    newGo.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// cards
+// ---------------------------------------------------------------------------
+// o menu vem antes do glyph: a sessao parece parada, mas esta travada num dialogo
+function stateOf(p) {
+  if (p.menu) return { key: "menu", label: "precisa de você" };
+  if (p.status === "idle") return { key: "idle", label: "concluído" };
+  if (p.status === "busy") return { key: "busy", label: "trabalhando" };
+  return { key: "shell", label: "shell" };
+}
+
+function restoreScroll(entry) {
+  const pinned = scroll.get(entry.id);
+  entry.refs.pre.scrollTop = pinned !== undefined ? pinned : entry.refs.pre.scrollHeight;
+}
+
+function build(p) {
+  const el = document.createElement("div");
+  const state = { sticky: 0 }; // ate quando o hint de erro fica protegido do refresh
+
+  const head = document.createElement("div");
+  head.className = "head";
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  const chip = document.createElement("span");
+  chip.className = "chip";
+  const title = document.createElement("span");
+  title.className = "title";
+  const meta = document.createElement("span");
+  meta.className = "meta";
+  const kill = document.createElement("button");
+  kill.className = "kill";
+  kill.textContent = "✕";
+  kill.title = "excluir esta sessão (fecha o pane no WezTerm)";
+  kill.onclick = (e) => { e.stopPropagation(); killPane(p.paneId); };
+  head.append(badge, chip, title, meta, kill);
+  head.title = "clique para abrir este pane no WezTerm · botão direito para mais ações";
+  head.onclick = () => api("/api/focus", { pane: p.paneId });
+  // so no cabecalho: o <pre> precisa do menu nativo para copiar texto
+  head.oncontextmenu = (e) => { e.preventDefault(); openPaneMenu(e, p.paneId); };
+
+  const pre = document.createElement("pre");
+  // em tela cheia o clique serve para selecionar texto, nao para roubar o foco
+  pre.onclick = () => { if (view !== "solo") api("/api/focus", { pane: p.paneId }); };
+  pre.addEventListener("scroll", () => {
+    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+    if (atBottom) scroll.delete(p.paneId); else scroll.set(p.paneId, pre.scrollTop);
+  });
+
+  const compose = document.createElement("div");
+  compose.className = "compose";
+  compose.onclick = (e) => e.stopPropagation(); // digitar aqui nao pode focar o WezTerm
+
+  const box = document.createElement("textarea");
+  box.placeholder = "responder… (Enter envia, Shift+Enter quebra linha)";
+  box.value = drafts.get(p.paneId) || "";
+  const autosize = () => {
+    box.style.height = "34px";
+    box.style.height = Math.min(box.scrollHeight, 120) + "px";
+  };
+  box.oninput = () => { drafts.set(p.paneId, box.value); autosize(); };
+  box.onkeydown = async (e) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    e.preventDefault();
+    const text = box.value;
+    if (!text.trim()) return;
+    box.value = "";
+    drafts.delete(p.paneId);
+    autosize();
+    hint.textContent = "enviando…";
+    try {
+      const res = await api("/api/send", { pane: p.paneId, text, submit: true });
+      // so 204 confirma envio: 409 = menu aberto, 200 com HTML = servidor desatualizado
+      if (res.status !== 204) {
+        box.value = text;            // devolve o rascunho, nunca perder a mensagem
+        drafts.set(p.paneId, text);
+        autosize();
+        hint.textContent = res.status === 200
+          ? "servidor desatualizado — reinicie o node server.js e recarregue"
+          : "não enviado: " + (await res.text()).slice(0, 160);
+        state.sticky = Date.now() + 8000;
+        return;
+      }
+      tick();
+    } catch (err) {
+      box.value = text;
+      drafts.set(p.paneId, text);
+      autosize();
+      hint.textContent = "falha de rede: " + err.message;
+      state.sticky = Date.now() + 8000;
+    }
+  };
+
+  const esc = document.createElement("button");
+  esc.textContent = "Esc";
+  esc.title = "interromper a sessão";
+  esc.onclick = () => api("/api/send", { pane: p.paneId, key: "esc" }).then(tick);
+
+  const open = document.createElement("button");
+  open.textContent = "⤢";
+  open.title = "focar este pane no WezTerm";
+  open.onclick = () => api("/api/focus", { pane: p.paneId });
+
+  compose.append(box, esc, open);
+
+  const hint = document.createElement("div");
+  hint.className = "hint";
+
+  el.append(head, pre, compose, hint);
+  return { id: p.paneId, el, state, refs: { badge, chip, title, meta, pre, box, hint, compose } };
+}
+
+function paint(entry, p) {
+  const { badge, chip, title, meta, pre, hint, compose } = entry.refs;
+  const st = stateOf(p);
+  const big = view === "solo" && p.paneId === soloId;
+  entry.el.className = "card " + st.key + (big ? " big" : "");
+  badge.textContent = st.label;
+  const g = groupById(groupOf(p.paneId));
+  chip.textContent = g ? g.name : "";
+  chip.style.display = g ? "" : "none";
+  chip.style.background = g ? g.color : "transparent";
+  title.textContent = p.title;
+  meta.textContent = "#" + p.paneId + (p.status === "idle" && p.quietFor > 2 ? " · parado " + p.quietFor + "s" : "");
+  // nao pisar numa mensagem de erro recem-escrita pelo envio
+  if (Date.now() > entry.state.sticky) {
+    hint.textContent = p.menu
+      ? "menu aberto — responda no WezTerm (⤢) ou mande Esc"
+      : p.status === "busy" ? "ocupado — o que você enviar entra na fila" : "";
+  }
+  entry.refs.box.disabled = !!p.menu;
+  compose.style.display = p.status === "shell" && !p.menu ? "none" : "";
+  if (pre.textContent !== p.tail) {
+    const pinned = scroll.get(p.paneId);
+    pre.textContent = p.tail;
+    pre.scrollTop = pinned !== undefined ? pinned : pre.scrollHeight;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// menu lateral
+// ---------------------------------------------------------------------------
+let dragPane = null;
+
+function clearDropMarks() {
+  for (const [, s] of sections) {
+    s.refs.head.classList.remove("drop");
+    s.body.classList.remove("drop");
+  }
+}
+
+function buildItem(p) {
+  // div com role=button: um <button draggable> nao inicia arraste em parte dos
+  // navegadores, e arrastar para o grupo e o gesto principal do menu lateral
+  const el = document.createElement("div");
+  el.className = "rail-item";
+  el.setAttribute("role", "button");
+  el.tabIndex = 0;
+  el.draggable = true;
+  el.title = "abrir em tela cheia · arraste para um grupo · botão direito para mais ações";
+  const top = document.createElement("div");
+  top.className = "rail-top";
+  const dot = document.createElement("span");
+  dot.className = "dot";
+  const name = document.createElement("span");
+  name.className = "rail-name";
+  const id = document.createElement("span");
+  id.className = "rail-id";
+  top.append(dot, name, id);
+  const state = document.createElement("div");
+  state.className = "rail-state";
+  el.append(top, state);
+  el.onclick = () => openSolo(p.paneId);
+  el.onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSolo(p.paneId); }
+    if (e.key === "Delete") { e.preventDefault(); killPane(p.paneId); }
+  };
+  el.oncontextmenu = (e) => { e.preventDefault(); openPaneMenu(e, p.paneId); };
+  el.addEventListener("dragstart", (e) => {
+    dragPane = p.paneId;
+    el.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(p.paneId));
+    // com todas as sessoes agrupadas, "sem grupo" estaria escondido por estar
+    // vazio - e sem ele nao ha para onde arrastar uma sessao para FORA do grupo
+    const semGrupo = sections.get("");
+    if (semGrupo) semGrupo.el.hidden = false;
+  });
+  el.addEventListener("dragend", () => {
+    dragPane = null;
+    el.classList.remove("dragging");
+    clearDropMarks();
+    placeRail(lastShown); // esconde "sem grupo" de novo se o arraste foi cancelado
+  });
+  return { el, refs: { name, id, state } };
+}
+
+function paintItem(item, p) {
+  const st = stateOf(p);
+  const on = view === "solo" && p.paneId === soloId;
+  item.el.className = "rail-item " + st.key + (on ? " on" : "");
+  item.refs.name.textContent = p.title;
+  item.refs.id.textContent = "#" + p.paneId;   // titulos se repetem, o id nao
+  item.refs.state.textContent = st.label +
+    (p.status === "idle" && p.quietFor > 2 ? " · " + p.quietFor + "s" : "");
+}
+
+function dropZone(zone, gid) {
+  zone.addEventListener("dragover", (e) => {
+    if (dragPane === null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    zone.classList.add("drop");
+  });
+  zone.addEventListener("dragleave", () => zone.classList.remove("drop"));
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("drop");
+    if (dragPane === null) return;
+    const alvo = dragPane;
+    dragPane = null;
+    if (groupOf(alvo) !== gid) assign(alvo, gid);
+  });
+}
+
+function ensureSection(gid) {
+  let s = sections.get(gid);
+  if (s) return s;
+  const el = document.createElement("div");
+  el.className = "group";
+  const head = document.createElement("div");
+  head.className = "group-head";
+  const caret = document.createElement("span");
+  caret.className = "group-caret";
+  const name = document.createElement("span");
+  name.className = "group-name";
+  const count = document.createElement("span");
+  count.className = "group-count";
+  head.append(caret, name, count);
+  const body = document.createElement("div");
+  body.className = "group-body";
+  el.append(head, body);
+  if (gid) {
+    head.onclick = () => {
+      const g = groupById(gid);
+      if (g) { g.collapsed = !g.collapsed; saveGroups(); }
+    };
+    head.oncontextmenu = (e) => { e.preventDefault(); openGroupMenu(e, gid); };
+    head.title = "clique para colapsar · botão direito para renomear ou excluir · solte uma sessão aqui";
+  } else {
+    head.title = "solte uma sessão aqui para tirá-la do grupo";
+  }
+  dropZone(head, gid);
+  dropZone(body, gid);
+  s = { el, body, refs: { head, caret, name, count } };
+  sections.set(gid, s);
+  return s;
+}
+
+function paintSection(gid, list) {
+  const s = sections.get(gid);
+  const g = gid ? groupById(gid) : null;
+  // "sem grupo" vazio some, mas reaparece durante um arraste: e o alvo para
+  // tirar uma sessao do grupo
+  s.el.hidden = !gid && list.length === 0 && dragPane === null;
+  s.refs.head.style.setProperty("--gc", g ? g.color : "#2b313d");
+  s.refs.name.textContent = g ? g.name : "sem grupo";
+  s.refs.caret.textContent = g && g.collapsed ? "▸" : "▾";
+  s.body.hidden = !!(g && g.collapsed);
+  // os pontos ficam no cabecalho mesmo colapsado: colapsar nunca pode esconder
+  // uma sessao em "precisa de voce"
+  s.refs.count.textContent = "";
+  const por = { menu: 0, idle: 0, busy: 0, shell: 0 };
+  for (const p of list) por[stateOf(p).key]++;
+  for (const k of ["menu", "idle", "busy", "shell"]) {
+    if (!por[k]) continue;
+    const i = document.createElement("i");
+    i.style.background = "var(--" + k + ")";
+    s.refs.count.append(i, document.createTextNode(String(por[k])));
+  }
+}
+
+// assinatura da estrutura: so ela muda o DOM das secoes, o resto e repintura
+let railSig = null;
+
+function orderedGroupIds() {
+  return groups.map((g) => g.id).concat([""]);
+}
+
+function placeRail(shown) {
+  const sig = groups.length
+    ? groups.map((g) => g.id + ":" + g.name + ":" + g.color + ":" + (g.collapsed ? 1 : 0)).join("|")
+    : "";
+  if (sig !== railSig) {
+    railSig = sig;
+    if (!groups.length) {
+      for (const [, s] of sections) s.el.remove();
+      sections.clear();
+    } else {
+      const quero = new Set(orderedGroupIds());
+      for (const [gid, s] of [...sections]) {
+        if (!quero.has(gid)) { s.el.remove(); sections.delete(gid); }
+      }
+      for (const gid of orderedGroupIds()) railList.append(ensureSection(gid).el);
+    }
+  }
+
+  const porGrupo = new Map(orderedGroupIds().map((g) => [g, []]));
+  for (const p of shown) {
+    const gid = groups.length ? groupOf(p.paneId) : "";
+    if (porGrupo.has(gid)) porGrupo.get(gid).push(p);
+    const alvo = groups.length ? ensureSection(gid).body : railList;
+    const item = items.get(p.paneId);
+    // trocar de pai e sempre acao do usuario (mover de grupo): aplica na hora,
+    // mesmo com o ponteiro sobre o menu. railHold congela so a reordenacao
+    // automatica por estado, que e o que fugiria debaixo do clique.
+    if (item.el.parentNode !== alvo) alvo.append(item.el);
+    else if (!railHold) alvo.append(item.el);
+  }
+  if (groups.length) for (const gid of orderedGroupIds()) paintSection(gid, porGrupo.get(gid) || []);
+  railEmpty.style.display = shown.length ? "none" : "";
+}
+
+// ---------------------------------------------------------------------------
+// grade
+// ---------------------------------------------------------------------------
+function ensureGridHead(gid) {
+  let h = gridHeads.get(gid);
+  if (h) return h;
+  const el = document.createElement("div");
+  el.className = "grid-head";
+  const sw = document.createElement("span");
+  sw.className = "sw2";
+  const b = document.createElement("b");
+  const n = document.createElement("span");
+  const bar = document.createElement("span");
+  bar.className = "bar";
+  el.append(sw, b, n, bar);
+  h = { el, sw, b, n };
+  gridHeads.set(gid, h);
+  return h;
+}
+
+function placeGrid(shown) {
+  // reordenar arrancaria da tela o card em que voce esta digitando
+  const typing = document.activeElement && document.activeElement.tagName === "TEXTAREA";
+
+  if (!groups.length) {
+    for (const [, h] of gridHeads) h.el.remove();
+    gridHeads.clear();
+    for (const p of shown) {
+      const entry = cards.get(p.paneId);
+      if (entry.el.parentNode !== grid) { grid.append(entry.el); restoreScroll(entry); }
+      else if (!typing) grid.append(entry.el);
+    }
+    return;
+  }
+
+  const order = orderedGroupIds();
+  const porGrupo = new Map(order.map((g) => [g, []]));
+  for (const p of shown) {
+    const gid = groupOf(p.paneId);
+    porGrupo.get(gid).push(p);
+  }
+  const quero = new Set(order);
+  for (const [gid, h] of [...gridHeads]) if (!quero.has(gid)) { h.el.remove(); gridHeads.delete(gid); }
+
+  for (const gid of order) {
+    const list = porGrupo.get(gid);
+    const h = ensureGridHead(gid);
+    if (!list.length) { h.el.remove(); continue; }
+    const g = gid ? groupById(gid) : null;
+    h.sw.style.background = g ? g.color : "#3a4150";
+    h.b.textContent = g ? g.name : "sem grupo";
+    h.n.textContent = list.length + (list.length === 1 ? " sessão" : " sessões");
+    if (h.el.parentNode !== grid) grid.append(h.el);
+    else if (!typing) grid.append(h.el);
+    for (const p of list) {
+      const entry = cards.get(p.paneId);
+      if (entry.el.parentNode !== grid) { grid.append(entry.el); restoreScroll(entry); }
+      else if (!typing) grid.append(entry.el);
+    }
+  }
+}
+
+function place(shown) {
+  const isSolo = view === "solo" && cards.has(soloId);
+  solo.style.display = isSolo ? "" : "none";
+  grid.style.display = isSolo ? "none" : "";
+
+  if (isSolo) {
+    const entry = cards.get(soloId);
+    // re-append a cada 1,5s tiraria o foco da caixa de texto
+    if (entry.el.parentNode !== solo) { solo.append(entry.el); restoreScroll(entry); }
+    for (const p of shown) {
+      if (p.paneId === soloId) continue;
+      const other = cards.get(p.paneId);
+      if (other && other.el.parentNode) other.el.remove();
+    }
+  } else {
+    placeGrid(shown);
+  }
+
+  placeRail(shown);
+}
+
+// ---------------------------------------------------------------------------
+// ciclo
+// ---------------------------------------------------------------------------
+async function tick() {
+  try {
+    const res = await api("/api/panes" + (view === "solo" && soloId !== null ? "?full=" + soloId : ""));
+    if (!res.ok) throw new Error(await res.text());
+    const panes = await res.json();
+    // "|| p.menu": uma sessao recem-aberta no dialogo de confianca ainda se chama
+    // claude.exe, sem glyph nenhum - esconde-la seria esconder quem mais espera voce
+    let shown = onlyClaude.checked ? panes.filter((p) => p.status !== "shell" || p.menu) : panes;
+
+    // panes mortos saem do mapa de grupos tambem no cliente; o servidor ja podou
+    // o arquivo contra a lista crua, aqui e so nao desenhar fantasma
+    const vivos = new Set(panes.map((p) => p.paneId));
+    for (const k of [...members.keys()]) if (!vivos.has(k)) members.delete(k);
+
+    // as pastas saem da lista inteira: um pane de shell comum tambem e um projeto
+    cwds.clear();
+    const pastas = [];
+    for (const p of panes) {
+      if (!p.cwd) continue;
+      cwds.set(p.paneId, p.cwd);
+      if (pastas.indexOf(p.cwd) < 0) pastas.push(p.cwd);
+    }
+    if (dirs.dataset.lista !== pastas.join("|")) {
+      dirs.dataset.lista = pastas.join("|");
+      dirs.textContent = "";
+      for (const d of pastas) {
+        const o = document.createElement("option");
+        o.value = d;
+        dirs.append(o);
+      }
+    }
+    fillGroupSelect();
+
+    if (view === "solo") {
+      const target = soloId === null ? null : panes.find((p) => p.paneId === soloId);
+      if (!target && Date.now() > soloGrace) {
+        // sem sessao escolhida, ou o pane sumiu (WezTerm reiniciado, sessao
+        // excluida): pega o primeiro do ranking do servidor, que e quem mais
+        // provavelmente espera voce
+        const escolhido = shown.length ? shown[0].paneId : null;
+        if (escolhido !== soloId) { soloId = escolhido; saveView(); if (soloId !== null) setTimeout(tick, 0); }
+      } else if (target && shown.indexOf(target) < 0) {
+        shown = [target].concat(shown);
+      }
+    }
+    lastShown = shown;
+
+    const alive = new Set(shown.map((p) => p.paneId));
+    for (const [id, entry] of cards) {
+      if (!alive.has(id)) { entry.el.remove(); cards.delete(id); }
+    }
+    for (const [id, item] of items) {
+      if (!alive.has(id)) { item.el.remove(); items.delete(id); }
+    }
+    for (const p of shown) {
+      let entry = cards.get(p.paneId);
+      if (!entry) { entry = build(p); cards.set(p.paneId, entry); }
+      paint(entry, p);
+      let item = items.get(p.paneId);
+      if (!item) { item = buildItem(p); items.set(p.paneId, item); }
+      paintItem(item, p);
+    }
+    place(shown);
+
+    btnGrid.classList.toggle("on", view !== "solo");
+    btnSolo.classList.toggle("on", view === "solo");
+    btnSolo.disabled = soloId === null && !shown.length;
+    stamp.textContent = new Date().toLocaleTimeString("pt-BR");
+  } catch (e) {
+    stamp.textContent = "erro: " + e.message;
+  }
+}
+
+setInterval(() => { if (follow.checked) tick(); }, 1500);
+onlyClaude.onchange = tick;
+paintSwatches();
+loadGroups().then(tick);
+</script>
+</body>
+</html>
