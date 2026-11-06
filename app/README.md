@@ -106,13 +106,41 @@ O `--selftest` dirige a interface de verdade (clica nos botões do renderer),
 abre uma sessão Claude real, conversa com ela, encerra, retoma e confere que a
 conversa voltou. Gasta alguns tokens, por isso não roda sozinho.
 
+**Feche o app antes de rodar**, ou passe `--user-data-dir`: com uma instância já
+aberta, o `requestSingleInstanceLock` mata a de teste na largada e ela sai com
+**código 0 sem rodar asserção nenhuma** — parece sucesso e não é.
+
+Se o app travar, há instrumentação embutida, inerte por padrão:
+
+    $env:DECK_DIAG="1"; $env:DECK_DIAG_LOG="$env:TEMP\deck-diag.log"
+    npx electron . --disable-background-timer-throttling `
+      --disable-renderer-backgrounding --disable-backgrounding-occluded-windows
+
+Rode **sem** `--user-data-dir` (para usar o estado real) e **com a janela em
+primeiro plano** — em segundo plano o Chromium estrangula timers e o log acusa
+~900 ms de atraso falso. O arquivo mostra qual passo segurou o processo; se o
+atraso aparecer sem passo nomeado, o bloqueio é nativo (ConPTY, antivírus) e não
+do código. Detalhes em
+[ARQUITETURA.md](ARQUITETURA.md#diagnóstico-de-travamento).
+
 ## Limites conhecidos
 
 - **Uma sessão na tela por vez.** A grade com vários cards lado a lado ainda não
   foi portada — veja [ARQUITETURA.md](ARQUITETURA.md#o-que-falta).
 - **Sem empacotamento.** Roda por `npm start`; não há `.exe` instalável ainda.
+  Quando houver, `conpty.dll` e `OpenConsole.exe` do node-pty precisam ficar
+  **fora do asar** — senão o app volta ao ConPTY do Windows em silêncio.
 - **Só Windows, por ora.** O código não tem nada de específico além do caminho
   do `claude.exe`, mas só foi testado aqui.
+- **ConPTY do pacote, não o do Windows.** O app pede `useConptyDll` ao node-pty,
+  porque o ConPTY da caixa do Win10 19045 conta emoji com a largura errada
+  (deixa letras que o backspace não apaga) e custa ~1 s por sessão ao encerrar.
+  A opção é marcada EXPERIMENTAL pelo node-pty; se algo estranho aparecer em
+  kill/exit, `CLAUDE_DECK_CONPTY=windows` volta ao comportamento antigo.
+- **Há um travamento relatado e não reproduzido:** janela congelada por mais de
+  5 s ao criar sessão com outra já aberta. Tudo que foi medido no caminho de
+  criar fica em 122 ms. Se acontecer com você, rode com `DECK_DIAG=1` (acima) e
+  guarde o log — é o que falta para decidir o rumo.
 
 ## Atalhos
 

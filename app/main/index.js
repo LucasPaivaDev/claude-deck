@@ -5,6 +5,11 @@ const { app, BrowserWindow, ipcMain, Menu, dialog, shell, clipboard } = require(
 
 const { SessionManager } = require("./sessions");
 const { Store } = require("./state");
+const diag = require("./diag");
+
+// Inerte sem DECK_DIAG=1. Tem de vir antes do primeiro ipcMain.handle.
+diag.embrulharIpc(ipcMain);
+diag.iniciarSonda();
 
 const store = new Store(path.join(app.getPath("userData"), "deck-state.json"));
 const manager = new SessionManager();
@@ -45,8 +50,18 @@ function createWindow() {
   // Sem isso, um erro no renderer e invisivel: nao ha terminal do outro lado.
   win.webContents.on("console-message", (ev) => {
     const onde = ev.sourceId ? ` (${String(ev.sourceId).split(/[\\/]/).pop()}:${ev.lineNumber})` : "";
-    console.log(`[renderer ${ev.level}] ${ev.message}${onde}`);
+    // Com o diagnostico ligado o console do renderer cai no MESMO arquivo do
+    // main, na mesma linha do tempo: sem isso nao da para dizer se o atraso
+    // comecou de um lado ou do outro.
+    if (diag.ligado) diag.log("renderer", `${ev.level}: ${ev.message}${onde}`);
+    else console.log(`[renderer ${ev.level}] ${ev.message}${onde}`);
   });
+
+  // O monitor do Chromium vigia o RENDERER e demora dezenas de segundos para
+  // disparar: a AUSENCIA destas linhas nao prova que a janela nao congelou. A
+  // metrica do congelamento e o atraso do event-loop do main.
+  win.webContents.on("unresponsive", () => diag.log("main", "webContents UNRESPONSIVE"));
+  win.webContents.on("responsive", () => diag.log("main", "webContents voltou a responder"));
   win.webContents.on("render-process-gone", (e, d) => {
     console.error("[renderer morreu]", JSON.stringify(d));
   });
@@ -176,7 +191,12 @@ manager.on("meta", (id) => {
   const s = manager.get(id);
   if (s && s.label && s.status !== "shell" && labelGravado.get(id) !== s.label) {
     labelGravado.set(id, s.label);
-    store.rememberSession({ id, cwd: s.cwd, label: s.label });
+    // Caminho quente escondido: isto e um writeFileSync sincrono e dispara a
+    // cada troca de label, varias vezes por sessao. Com antivirus mordendo
+    // cada gravacao em %APPDATA%, ele vira o problema inteiro.
+    diag.passo("rememberSession (troca de label)", () =>
+      store.rememberSession({ id, cwd: s.cwd, label: s.label })
+    );
   }
   pushMeta();
 });
@@ -199,6 +219,7 @@ setInterval(() => {
 // ------------------------------------------------------------------- IPC
 
 ipcMain.handle("deck:bootstrap", () => ({
+  diag: diag.ligado,
   state: store.publicState(),
   sessions: sessionList(),
   claudeAvailable: manager.available,
@@ -207,11 +228,14 @@ ipcMain.handle("deck:bootstrap", () => ({
 }));
 
 ipcMain.handle("deck:spawn", (e, { cwd, groupId, cols, rows } = {}) => {
-  const s = manager.spawn({ cwd: String(cwd || ""), cols, rows });
-  store.rememberSession({ id: s.id, cwd: s.cwd, label: "" });
-  if (groupId) store.setMember(s.id, String(groupId));
-  pushState();
-  pushMeta();
+  // Os passos sao nomeados porque "criar sessao trava o app" precisa virar
+  // "trava NO passo tal": manager.spawn e o ConPTY (nativo, onde um antivirus
+  // corporativo intercepta a criacao do processo), rememberSession e um
+  // writeFileSync+rename em %APPDATA% (idem, e num perfil de rede pode doer).
+  const s = diag.passo("manager.spawn", () => manager.spawn({ cwd: String(cwd || ""), cols, rows }));
+  diag.passo("rememberSession", () => store.rememberSession({ id: s.id, cwd: s.cwd, label: "" }));
+  if (groupId) diag.passo("setMember", () => store.setMember(s.id, String(groupId)));
+  diag.passo("pushState+pushMeta", () => { pushState(); pushMeta(); });
   return s.meta();
 });
 
@@ -260,9 +284,12 @@ ipcMain.handle("deck:kill", (e, { id, forget } = {}) => {
   const s = manager.get(id);
   if (s) {
     attached.delete(id);
-    manager.remove(id);
+    // O pty.kill() chega a segurar o main por ~1s por sessao com o ConPTY da
+    // caixa do Windows (medido: 835-1049ms). Com o useConptyDll do sessions.js
+    // cai para ~0. Este passo existe para provar isso na maquina de quem usa.
+    diag.passo("manager.remove (pty.kill)", () => manager.remove(id));
   }
-  store.closeSession(id, { forget: !!forget });
+  diag.passo("closeSession", () => store.closeSession(id, { forget: !!forget }));
   pushState();
   pushMeta();
   return true;

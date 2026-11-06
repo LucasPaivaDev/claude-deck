@@ -7,6 +7,14 @@
   --idle: #5ad17f; --busy: #e0b254; --shell: #5a6372; --menu: #e86a8c; --closed: #4a515f;
 }
 * { box-sizing: border-box; }
+/* O atributo `hidden` e a unica forma como o renderer esconde painel, cabecalho
+   e rodape - mas QUALQUER regra de autor com `display` vence o
+   `[hidden] { display: none }` da folha do navegador (origem autor > UA). Sem
+   este !important, `.nothing { display: grid }` deixava a mensagem de "sessao
+   encerrada" na tela para sempre e, como ela e `#termWrap` sao os dois
+   `flex: 1`, o palco rachava ao meio: metade de cima mensagem, metade de baixo
+   terminal. O `#ctx[hidden]` logo abaixo era um remendo pontual do mesmo bug. */
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);

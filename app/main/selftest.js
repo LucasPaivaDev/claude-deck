@@ -84,6 +84,66 @@ async function run(win, manager, store, cwd, api) {
     const cols = await js(`document.querySelector("#term .xterm") ? 1 : 0`);
     ok(cols === 1, "o xterm esta montado no palco");
 
+    // --- regressao de layout.
+    //
+    // A mensagem do palco ("nenhuma sessao aberta" / "sessao encerrada") tem
+    // `display: grid`, e regra de autor vence o `[hidden] { display: none }` da
+    // folha do navegador. O `hidden` que o openSession setava nela era um no-op:
+    // mensagem e terminal ficavam visiveis ao MESMO tempo e, como os dois sao
+    // `flex: 1`, o terminal ficava com metade do palco - medido, 361px de 779px.
+    // O `[hidden] { display: none !important }` do styles.css conserta; isto
+    // aqui garante que ninguem reintroduza um `display` que volte a vence-lo.
+    const layout = await js(`(() => {
+      const st = document.getElementById("stage").getBoundingClientRect();
+      const nd = document.getElementById("nothing");
+      const tw = document.getElementById("termWrap");
+      return {
+        mensagemNaTela:
+          getComputedStyle(nd).display !== "none" || nd.getBoundingClientRect().height > 0,
+        fracao: st.height ? tw.getBoundingClientRect().height / st.height : 0,
+      };
+    })()`);
+    ok(!layout.mensagemNaTela, "a mensagem do palco sumiu com a sessao aberta");
+    ok(
+      layout.fracao > 0.8,
+      `o terminal ocupa o palco inteiro (${Math.round(layout.fracao * 100)}% da altura)`
+    );
+
+    // --- regressao do menu lateral congelado.
+    //
+    // O railHold barrava o paintRail INTEIRO enquanto o ponteiro estivesse
+    // sobre o menu - e "+ sessão" e "abrir" ficam DENTRO dele, entao logo
+    // depois de criar uma sessao o ponteiro esta sempre ali. A lista parava de
+    // atualizar: sessao nova nao aparecia, a selecao nao movia e o "parado Xs"
+    // congelava, ate o usuario tirar o mouse do menu. Um app que parece parado.
+    // Agora o congelamento vale so para a ORDEM dos itens.
+    for (let i = 0; i < 20; i++) {
+      const m = manager.get(meta.id);
+      if (m && m.status === "idle") break;
+      await espera(500);
+    }
+    const idleAgora = (manager.get(meta.id) || {}).status === "idle";
+    ok(idleAgora, "sessao esta parada para medir o contador do menu lateral");
+    if (idleAgora) {
+      const cont = await js(`(async () => {
+        const rail = document.getElementById("rail");
+        rail.dispatchEvent(new PointerEvent("pointerenter"));
+        const ler = () => {
+          const el = document.querySelector("#railList .rail-state");
+          return el ? el.textContent : "<sem item>";
+        };
+        const antes = ler();
+        await new Promise((r) => setTimeout(r, 2600));
+        const depois = ler();
+        rail.dispatchEvent(new PointerEvent("pointerleave"));
+        return { antes, depois };
+      })()`);
+      ok(
+        cont.antes !== cont.depois,
+        `o menu lateral atualiza com o ponteiro sobre ele (${JSON.stringify(cont.antes)} -> ${JSON.stringify(cont.depois)})`
+      );
+    }
+
     // --- menu lateral e cabecalho
     const railN = await js(`document.querySelectorAll("#railList .rail-item").length`);
     ok(railN >= 1, `menu lateral tem ${railN} sessao(oes)`);

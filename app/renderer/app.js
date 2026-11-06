@@ -41,10 +41,19 @@ let current = null;           // sessao na tela
 let anexado = null;           // id realmente anexado ao stream (nem sempre = current)
 let attaching = null;         // id em processo de attach
 let queued = [];              // chunks que chegaram durante o attach
+// Geracao do attach. Dois openSession() podem estar no ar ao mesmo tempo (o
+// resume dispara um pelo auto-reparo do onSessions e outro pelo seu proprio
+// await), e o id e o MESMO nos dois - a guarda `current !== id` nao separa um
+// do outro. Sem isto, os dois snapshots eram escritos em sequencia e a tela
+// ficava com texto duplicado: glyphs que o TUI nunca repinta porque, para ele,
+// aquelas linhas nem existem.
+let attachGen = 0;
 let gfColor = null;
 let gfEdit = null;            // grupo em edicao (null = criando)
 let dragId = null;
 let railHold = false;         // congela a reordenacao enquanto o ponteiro esta no menu
+let railPressed = false;      // botao apertado no menu: nao trocar o no sob o cursor
+let ordemCongelada = null;    // ids na ordem em que estavam quando o ponteiro entrou
 
 const LABEL = {
   idle: "concluído", busy: "trabalhando", menu: "precisa de você",
@@ -89,7 +98,17 @@ term.open($("term"));
 // sessao de fato mostrou na tela.
 window.__term = term;
 try {
-  term.loadAddon(new window.WebglAddon.WebglAddon());
+  const webgl = new window.WebglAddon.WebglAddon();
+  // Sem este handler, uma perda de contexto da GPU (suspensao do Windows, troca
+  // de adaptador, OOM do driver) congela o canvas: o que estava escrito fica na
+  // tela para sempre e nenhum repaint do TUI apaga. Descartar o addon devolve o
+  // renderer DOM, mais lento mas que sempre repinta - e o padrao recomendado no
+  // README do @xterm/addon-webgl.
+  webgl.onContextLoss(() => {
+    console.warn("contexto WebGL perdido: caindo para o renderer DOM");
+    try { webgl.dispose(); } catch (e) { /* ja foi */ }
+  });
+  term.loadAddon(webgl);
 } catch (e) {
   console.warn("WebGL indisponível, usando o renderer DOM:", e.message);
 }
@@ -200,10 +219,19 @@ window.addEventListener("resize", scheduleFit);
 
 async function openSession(id) {
   const s = sessions.find((x) => x.id === id);
-  if (!s) return;
-  if (s.status === "closed") { selectClosed(s); return; }
+  if (s && s.status === "closed") { selectClosed(s); return; }
+  // Uma sessao recem-criada pode ainda nao constar da lista: o push
+  // "deck:sessions" e a resposta do invoke do spawn sao duas mensagens
+  // diferentes, e nada garante qual chega primeiro. O `return` que havia aqui
+  // deixava o palco parado no quadro da sessao ANTERIOR, sem erro nenhum - o
+  // pior tipo de "travou". O deck:attach do main ja valida o id, entao seguir
+  // em frente e seguro: se o id for mesmo invalido, o catch adiante explica.
+  if (!s) {
+    console.warn("openSession(" + String(id).slice(0, 8) + "): ainda não está na lista — anexando assim mesmo");
+  }
   if (current === id) { term.focus(); return; }
 
+  const gen = ++attachGen;
   const anterior = current;
   current = id;
   attaching = id;
@@ -220,12 +248,13 @@ async function openSession(id) {
   try {
     r = await window.deck.attach(id);
   } catch (e) {
+    if (gen !== attachGen) return;
     attaching = null;
     anexado = null;
     showNothing("não foi possível abrir: " + e.message);
     return;
   }
-  if (current !== id) return; // o usuario trocou de sessao no meio
+  if (gen !== attachGen || current !== id) return; // trocou de sessao no meio
   term.write(r.snapshot);
   attaching = null;
   anexado = id;
@@ -276,20 +305,36 @@ function showNothing(msg) {
  */
 function dimsDoPalco() {
   const antes = termWrap.hidden;
+  const antesNada = nothing.hidden;
   if (antes) { termWrap.hidden = false; nothing.hidden = true; }
   let d = null;
   try { d = fitAddon.proposeDimensions(); } catch (e) { d = null; }
-  if (antes && !d) { termWrap.hidden = true; nothing.hidden = false; }
+  // Restaura SEMPRE, nao so quando a medicao falha. Antes, uma medicao bem
+  // sucedida deixava o palco com um terminal vazio no lugar da mensagem - e se
+  // o spawn logo a seguir desse erro (pasta invalida, claude fora do PATH), a
+  // tela ficava nesse limbo, sem terminal e sem explicacao. Quem de fato abre a
+  // sessao (openSession) reexibe o terminal.
+  if (antes) { termWrap.hidden = true; nothing.hidden = antesNada; }
   return d && d.cols && d.rows ? d : { cols: undefined, rows: undefined };
 }
 
 async function resume(id) {
   try {
     const d = dimsDoPalco();
+    // O handler deck:resume do main faz pushMeta() ANTES de devolver o meta,
+    // entao o onSessions chega aqui primeiro e o auto-reparo dispararia um
+    // openSession por conta propria - um segundo attach na mesma sessao, com
+    // dois snapshots caindo na mesma tela. Marcar `attaching` antes da ida ao
+    // main faz a guarda do auto-reparo pular: quem abre a sessao e o await
+    // daqui, e so ele. (O contador de geracao sozinho nao resolve este caso: o
+    // primeiro attach ja poria a sessao em `attached` no main.)
+    attaching = id;
     const m = await window.deck.resume(id, d.cols, d.rows);
     current = null;
+    if (attaching === id) attaching = null; // nao atropela o attach de outra
     await openSession(m.id);
   } catch (e) {
+    if (attaching === id) attaching = null;
     showNothing("não deu para retomar: " + e.message);
   }
 }
@@ -341,17 +386,45 @@ function sortSessions(list) {
 }
 
 /**
- * @param {boolean} force ignora o railHold. O congelamento existe para a ordem
- * automatica (por estado) nao fugir debaixo do clique enquanto o ponteiro esta
- * sobre o menu - mas o drop de um arraste acontece exatamente ali. Mudanca de
- * grupo e gesto do usuario: aplica sempre.
+ * Ordem do menu lateral.
+ *
+ * Enquanto o ponteiro esta sobre o rail a ORDEM fica congelada no arranjo que
+ * estava sob o cursor - e so a ordem. Antes o railHold barrava o paintRail
+ * INTEIRO, e isso era grave: "+ sessão" e "abrir" ficam DENTRO do rail, entao
+ * logo depois de criar uma sessao o ponteiro esta sempre aqui. O menu nao
+ * mostrava a sessao nova, nao movia a selecao e nao avancava o "parado Xs" ate
+ * o usuario tirar o mouse dali - um app que parece parado.
+ *
+ * Sessao nascida com o congelamento ligado entra no fim, sem embaralhar o
+ * resto: aparecer fora de ordem e muito melhor do que nao aparecer.
+ */
+function ordemDoRail(list) {
+  const ordenado = sortSessions(list);
+  if (!railHold) { ordemCongelada = null; return ordenado; }
+  if (!ordemCongelada) { ordemCongelada = ordenado.map((s) => s.id); return ordenado; }
+  const pos = new Map(ordemCongelada.map((id, i) => [id, i]));
+  const fim = ordemCongelada.length;
+  // sort estavel: os ids novos (todos com a mesma chave) mantem a ordem natural
+  return ordenado.sort(
+    (a, b) => (pos.has(a.id) ? pos.get(a.id) : fim) - (pos.has(b.id) ? pos.get(b.id) : fim)
+  );
+}
+
+/**
+ * @param {boolean} force recalcula a ordem mesmo com o ponteiro sobre o menu.
+ * O drop de um arraste e a troca de grupo acontecem exatamente ali, e sao gesto
+ * do usuario: tem de aparecer na hora.
  */
 function paintRail(force) {
-  if (!force && railHold && railList.childElementCount) return;
+  // Unica janela em que repintar e de fato perigoso: com o botao apertado,
+  // trocar o no sob o cursor faz o mouseup cair noutro elemento e o clique se
+  // perde. Fora dela, repintar sempre.
+  if (!force && railPressed && railList.childElementCount) return;
+  if (force) ordemCongelada = null;
   railList.textContent = "";
   railEmpty.hidden = sessions.length > 0;
 
-  const ordered = sortSessions(sessions);
+  const ordered = ordemDoRail(sessions);
   const secoes = new Map();
 
   const sectionFor = (gid) => {
@@ -456,6 +529,20 @@ function paintRail(force) {
 
 rail.addEventListener("pointerenter", () => { railHold = true; });
 rail.addEventListener("pointerleave", () => { railHold = false; paintRail(); });
+// Soltar o botao destrava. Precisa dos quatro eventos, nao so do pointerup:
+// quando comeca um arraste HTML5 o Chromium manda "pointercancel" e o pointerup
+// NUNCA chega - um unico arraste entre grupos deixaria o menu congelado para
+// sempre, que e exatamente o bug que este bloco existe para nao recriar.
+rail.addEventListener("pointerdown", () => { railPressed = true; });
+const soltou = () => {
+  if (!railPressed) return;
+  railPressed = false;
+  paintRail();
+};
+window.addEventListener("pointerup", soltou);
+window.addEventListener("pointercancel", soltou);
+window.addEventListener("dragend", soltou);
+window.addEventListener("blur", soltou);
 
 function drop(gid) {
   if (!dragId) return;
@@ -720,6 +807,22 @@ window.deck.onExit(({ id }) => {
   const b = await window.deck.bootstrap();
   state = b.state;
   sessions = b.sessions;
+  // Sonda de atraso do renderer, so com DECK_DIAG=1. O console do renderer e
+  // reencaminhado para o mesmo arquivo do main, entao as duas linhas do tempo
+  // ficam lado a lado e da para dizer de que lado o atraso comecou.
+  //
+  // ATENCAO ao ler: com a janela em SEGUNDO PLANO o Chromium estrangula os
+  // timers e isto acusa ~900ms de atraso por segundo sem haver travamento
+  // nenhum. Medir sempre com a janela em primeiro plano, e com as flags
+  // --disable-background-timer-throttling / --disable-renderer-backgrounding.
+  if (b.diag) {
+    let esperado = performance.now() + 100;
+    setInterval(() => {
+      const atraso = Math.round(performance.now() - esperado);
+      if (atraso >= 50) console.warn("renderer event-loop atrasou " + atraso + "ms");
+      esperado = performance.now() + 100;
+    }, 100);
+  }
   if (!b.claudeAvailable) {
     showNothing("claude.exe não foi encontrado no PATH");
   } else {

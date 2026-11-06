@@ -7,6 +7,7 @@ const path = require("path");
 const pty = require("node-pty");
 const { Terminal } = require("@xterm/headless");
 const { SerializeAddon } = require("@xterm/addon-serialize");
+const { Unicode11Addon } = require("@xterm/addon-unicode11");
 
 const { classify, detectMenu } = require("./classify");
 
@@ -82,6 +83,49 @@ function resolveClaude() {
   return null;
 }
 
+/**
+ * Abre o PTY pedindo o ConPTY que vem no pacote do node-pty, e nao o do
+ * Windows.
+ *
+ * E ESTA a correcao do "apago com backspace e a letra continua na tela".
+ *
+ * O ConPTY nao repassa os bytes do Claude: ele redesenha num buffer de console
+ * do Windows e re-serializa o que ficou la. Quem decide quantas celulas um
+ * glyph ocupa, portanto, e o ConPTY - e o do Win10 19045 usa uma tabela velha.
+ * Medido: ⚡ ⏳ ✅ valem 1 celula para ele, enquanto o Bun.stringWidth (o
+ * claude.exe e binario Bun) diz 2. Quando o TUI manda apagar a coluna 12, o
+ * ConPTY do SO acha que a linha acabou na 11, NAO APAGA NADA e so acrescenta um
+ * espaco no fim: o caractere da ponta sobrevive. Como o estrago acontece dentro
+ * do buffer do ConPTY, antes de qualquer xterm, nenhum ajuste no renderer
+ * alcanca isso.
+ *
+ * O node-pty traz um ConPTY proprio e bem mais novo em
+ * third_party/conpty/1.23.251008001 (o mesmo arquivo que vai para
+ * prebuilds/win32-x64/conpty - conferido por sha256), e esse concorda celula a
+ * celula com o Bun.stringWidth e com o Unicode 11 dos dois xterm deste app.
+ * Opcao documentada em node_modules/node-pty/typings/node-pty.d.ts:104 e
+ * repassada em lib/windowsTerminal.js:51.
+ *
+ * O node-pty marca a opcao como EXPERIMENTAL e ela muda os caminhos de
+ * kill/exit/conout - por isso o fallback: se a dll do pacote sumir (um build
+ * empacotado que nao copie third_party, por exemplo), a sessao ainda nasce, com
+ * o bug de largura de volta mas aberta, que e melhor que uma sessao que nao
+ * abre. Para desligar a opcao de proposito: CLAUDE_DECK_CONPTY=windows.
+ */
+function abrirPty(claudePath, args, opts) {
+  const doPacote =
+    process.platform === "win32" && process.env.CLAUDE_DECK_CONPTY !== "windows";
+  if (!doPacote) return pty.spawn(claudePath, args, opts);
+  try {
+    return pty.spawn(claudePath, args, { ...opts, useConptyDll: true });
+  } catch (e) {
+    console.warn(
+      "[pty] ConPTY do pacote indisponivel (" + e.message + "): usando o do Windows"
+    );
+    return pty.spawn(claudePath, args, opts);
+  }
+}
+
 class Session extends EventEmitter {
   /**
    * @param {{id:string, cwd:string, resume:boolean, claudePath:string}} opts
@@ -120,6 +164,26 @@ class Session extends EventEmitter {
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
 
+    // Mesma tabela de largura do xterm do renderer, que roda em Unicode 11.
+    // Tres camadas contam celulas neste app - o ConPTY (que redesenha num
+    // buffer de console do Windows e re-serializa), o espelho e a view - e as
+    // tres TEM que concordar. Medido com ConPTY de verdade:
+    //
+    //   glyph           ConPTY do SO   ConPTY da dll   xterm v6   xterm v11
+    //   ⚡ ⏳ ✅                1              2             1          2
+    //   🚀                     2              2             1          2
+    //   ✳ ◐ ❯ │ Nerd Font      1              1             1          1
+    //
+    // So existe uma combinacao sem divergencia nenhuma: ConPTY da dll +
+    // Unicode 11 nos dois xterm. Por isso esta linha anda junto com o
+    // `useConptyDll` do abrirPty() - uma sem a outra nao resolve.
+    try {
+      this.term.loadAddon(new Unicode11Addon());
+      this.term.unicode.activeVersion = "11";
+    } catch (e) {
+      /* sem o addon o espelho fica em v6: divergente, mas nao fatal */
+    }
+
     // Titulo vem do OSC 0/2 que o proprio Claude emite. Medido em ConPTY:
     // "claude" -> "✳ Claude Code" -> "◐ ..." -> "✳ <assunto>". E evento, nao
     // polling: o status muda no instante em que a sessao muda.
@@ -136,7 +200,7 @@ class Session extends EventEmitter {
     });
 
     const args = resume ? ["--resume", id] : ["--session-id", id];
-    this.pty = pty.spawn(claudePath, args, {
+    this.pty = abrirPty(claudePath, args, {
       name: "xterm-256color",
       cols: this.cols,
       rows: this.rows,
@@ -164,19 +228,31 @@ class Session extends EventEmitter {
   }
 
   _onData(d) {
-    this.term.write(d);
     this.lastChange = Date.now();
-    this._pending.push(d);
-    if (!this._flushTimer) this._flushTimer = setTimeout(() => this._flush(), FLUSH_MS);
+    // O write do xterm NAO e imediato: ele enfileira e parseia num tick
+    // seguinte. O chunk so pode entrar em _pending DEPOIS de o espelho ter
+    // parseado, senao abre um buraco por onde o byte some de vez:
+    //
+    //   deck:attach chama flush() - o chunk sai da fila e, como o id ainda
+    //   nao esta em `attached`, vai para o vazio - e logo depois snapshot(),
+    //   que serializa so o que JA foi parseado, ou seja, sem o chunk.
+    //
+    // O byte nao entra no snapshot nem no stream. Medido: um chunk que apagava
+    // uma linha se perdia assim, e a linha velha ficava na tela da view para
+    // sempre - o TUI acha que ja apagou aquilo e nunca mais repinta.
+    this.term.write(d, () => {
+      this._pending.push(d);
+      if (!this._flushTimer) this._flushTimer = setTimeout(() => this._flush(), FLUSH_MS);
+    });
     if (this._menuTimer) clearTimeout(this._menuTimer);
     this._menuTimer = setTimeout(() => this._recheckMenu(), MENU_DEBOUNCE_MS);
   }
 
   /**
    * Esvazia a fila agora. Usado antes de tirar um snapshot para um renderer
-   * que esta anexando: o term ja absorveu os bytes pendentes (o write e
-   * imediato), entao se eles continuassem na fila seriam entregues DEPOIS do
-   * snapshot e apareceriam duas vezes na tela.
+   * que esta anexando: tudo que esta em _pending ja foi parseado pelo espelho
+   * (ver _onData) e portanto JA esta dentro do snapshot - se continuasse na
+   * fila seria entregue depois dele e apareceria duas vezes na tela.
    */
   flush() {
     this._flush();
