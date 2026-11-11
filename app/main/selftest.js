@@ -177,6 +177,54 @@ async function run(win, manager, store, cwd, api) {
     ok(st.grupos === 1 && st.membro === "g1", "grupo criado e sessao movida para dentro dele");
     ok(store.state.members[meta.id] === "g1", "membro persistido no disco pelo main");
 
+    // --- regressao: clique esquerdo no menu lateral.
+    //
+    // O destravamento do rail rodava paintRail() dentro do listener de
+    // `pointerup`. O Chromium despacha pointerup ANTES de mouseup e de click,
+    // no mesmo task, entao o `.rail-item` (ou o cabecalho de grupo) em que o
+    // mousedown caiu ja estava fora do DOM quando o click seria emitido - e o
+    // click nao era emitido. O menu inteiro parava de navegar, em todo clique
+    // esquerdo; so o botao direito funcionava, porque `contextmenu` nao exige o
+    // mesmo no nas duas pontas.
+    //
+    // Este teste PRECISA de input real (sendInputEvent). Um el.click() ou um
+    // dispatchEvent(new MouseEvent("click")) miram o no direto e passam com o
+    // bug presente - foi por isso que a leva anterior passou no autoteste.
+    await espera(600);
+    const alvo = await js(`(() => {
+      const h = document.querySelector("#railList .group-head");
+      if (!h) return null;
+      const r = h.getBoundingClientRect();
+      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    })()`);
+    ok(!!alvo, "cabecalho de grupo esta no menu lateral para receber o clique");
+    if (alvo) {
+      const antesColapso = !!(store.state.groups[0] || {}).collapsed;
+      const evento = (type, extra) =>
+        win.webContents.sendInputEvent(Object.assign({ type, x: alvo.x, y: alvo.y }, extra));
+      evento("mouseMove");
+      await espera(120);
+      evento("mouseDown", { button: "left", clickCount: 1 });
+      await espera(60);
+      evento("mouseUp", { button: "left", clickCount: 1 });
+      await espera(700);
+      const depoisColapso = !!(store.state.groups[0] || {}).collapsed;
+      ok(
+        depoisColapso !== antesColapso,
+        `clique esquerdo de verdade no menu lateral chegou ao onclick (collapsed ${antesColapso} -> ${depoisColapso})`
+      );
+      // devolve o grupo ao estado anterior para nao mudar o que vem depois
+      if (depoisColapso !== antesColapso) {
+        evento("mouseDown", { button: "left", clickCount: 1 });
+        await espera(60);
+        evento("mouseUp", { button: "left", clickCount: 1 });
+        await espera(700);
+      }
+      // tira o ponteiro do rail: parado sobre ele, o railHold congela a ordem
+      win.webContents.sendInputEvent({ type: "mouseMove", x: 10, y: 10 });
+      await espera(150);
+    }
+
     // --- uma conversa de verdade antes de encerrar: o --resume precisa de
     // algo para retomar, e sessao vazia nao e o caso que importa testar
     await js(`window.deck.write(${JSON.stringify(meta.id)}, "responda apenas: OK")`);

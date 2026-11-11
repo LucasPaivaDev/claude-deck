@@ -53,6 +53,8 @@ let gfEdit = null;            // grupo em edicao (null = criando)
 let dragId = null;
 let railHold = false;         // congela a reordenacao enquanto o ponteiro esta no menu
 let railPressed = false;      // botao apertado no menu: nao trocar o no sob o cursor
+let railDirty = false;        // algum paintRail foi pulado enquanto apertado
+let soltando = false;         // ja ha um destravamento agendado para a proxima task
 let ordemCongelada = null;    // ids na ordem em que estavam quando o ponteiro entrou
 
 const LABEL = {
@@ -416,10 +418,11 @@ function ordemDoRail(list) {
  * do usuario: tem de aparecer na hora.
  */
 function paintRail(force) {
-  // Unica janela em que repintar e de fato perigoso: com o botao apertado,
-  // trocar o no sob o cursor faz o mouseup cair noutro elemento e o clique se
-  // perde. Fora dela, repintar sempre.
-  if (!force && railPressed && railList.childElementCount) return;
+  // Unica janela em que repintar e de fato perigoso: trocar o no sob o cursor
+  // tira do DOM o elemento em que o mousedown caiu, e o clique se perde. A
+  // janela NAO termina no pointerup - vai ate o `click` ter sido despachado
+  // (ver `soltou` adiante). Fora dela, repintar sempre.
+  if (!force && railPressed && railList.childElementCount) { railDirty = true; return; }
   if (force) ordemCongelada = null;
   railList.textContent = "";
   railEmpty.hidden = sessions.length > 0;
@@ -535,9 +538,24 @@ rail.addEventListener("pointerleave", () => { railHold = false; paintRail(); });
 // sempre, que e exatamente o bug que este bloco existe para nao recriar.
 rail.addEventListener("pointerdown", () => { railPressed = true; });
 const soltou = () => {
-  if (!railPressed) return;
-  railPressed = false;
-  paintRail();
+  if (!railPressed || soltando) return;
+  soltando = true;
+  // NAO destravar aqui. O `pointerup` e despachado ANTES de `mouseup` e de
+  // `click`, no mesmo task: um paintRail() agora apaga o `.rail-item` em que o
+  // mousedown caiu e o recria como OUTRO no. O Chromium entao nao acha
+  // ancestral comum entre o alvo do down (ja fora do DOM) e o do up, e o
+  // `click` nao e emitido - o menu lateral para de navegar, em TODO clique
+  // esquerdo. O botao direito continuava funcionando porque `contextmenu` nao
+  // exige o mesmo no nas duas pontas; foi esse o sintoma relatado.
+  //
+  // setTimeout(0) poe o repaint na task SEGUINTE, depois de o click ja ter
+  // sido entregue e o openSession ter rodado. queueMicrotask/Promise nao
+  // servem: microtasks drenam ao fim de cada listener, ainda antes do click.
+  setTimeout(() => {
+    railPressed = false;
+    soltando = false;
+    if (railDirty) { railDirty = false; paintRail(); }
+  }, 0);
 };
 window.addEventListener("pointerup", soltou);
 window.addEventListener("pointercancel", soltou);
